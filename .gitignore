@@ -1,0 +1,21 @@
+# Saidas geradas pelos scripts - nunca versionar
+Diagnostico_*.html
+Evidencias_*.zip
+Teste_Loja_*.txt
+*.log
+logs/
+
+# Ambiente local
+*.local.ps1
+*.local.sql
+config.local.*
+
+# Sistema
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Editores
+.vscode/
+.idea/
+*.swp
