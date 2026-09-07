@@ -6,6 +6,10 @@ Written from the perspective of the person who answers the store's support call:
 
 **[→ Sample report](docs/exemplo-relatorio.html)** · **[→ Triage runbook (Portuguese)](docs/RUNBOOK.md)** · [Português](README.md)
 
+![Diagnostic report produced by the toolkit](docs/exemplo-relatorio.png)
+
+*Report produced by `Diagnostico-PDV.ps1`. Sample data is fictional.*
+
 ---
 
 ## Contents

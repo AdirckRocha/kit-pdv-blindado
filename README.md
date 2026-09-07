@@ -6,6 +6,10 @@ Foi escrito por quem atende chamado de loja: o objetivo é **descobrir onde est�
 
 **[→ Veja um relatório de exemplo](docs/exemplo-relatorio.html)** · **[→ Runbook de PDV parado](docs/RUNBOOK.md)** · [English](README.en.md)
 
+![Relatório de diagnóstico gerado pelo Kit PDV Blindado](docs/exemplo-relatorio.png)
+
+*Relatório gerado por `Diagnostico-PDV.ps1`. Dados do exemplo são fictícios.*
+
 ---
 
 ## O que tem aqui
