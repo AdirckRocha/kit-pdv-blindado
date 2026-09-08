@@ -58,15 +58,19 @@ function Add-Correcao {
 # Mascara dados que identificam a maquina e a rede. Somente com -Anonimizar.
 function Mascarar([string]$t) {
     if (-not $Anonimizar -or [string]::IsNullOrEmpty($t)) { return $t }
-    if ($env:COMPUTERNAME) { $t = $t -replace [regex]::Escape($env:COMPUTERNAME), "TERMINAL-XX" }
-    if ($env:USERNAME)     { $t = $t -replace [regex]::Escape($env:USERNAME), "usuario" }
-    if ($env:USERDOMAIN)   { $t = $t -replace [regex]::Escape($env:USERDOMAIN), "DOMINIO" }
-    if ($ServidorLoja)     { $t = $t -replace [regex]::Escape($ServidorLoja), "SERVIDOR-XX" }
-    if ($script:SerialReal){ $t = $t -replace [regex]::Escape($script:SerialReal), "********" }
-    # apenas faixas privadas - resolvedores publicos continuam legiveis
+    # ORDEM IMPORTA: enderecos IP primeiro. Se o nome do servidor for um IP
+    # (ex.: 10.0.0.1), substitui-lo antes cortaria o meio de outro endereco
+    # que o contenha (10.0.0.141 viraria SERVIDOR-XX41, vazando o final).
+    # Apenas faixas privadas - resolvedores publicos continuam legiveis.
     $t = $t -replace "\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "10.x.x.x"
     $t = $t -replace "\b192\.168\.\d{1,3}\.\d{1,3}\b", "192.168.x.x"
     $t = $t -replace "\b172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b", "172.x.x.x"
+    # \b impede que um nome curto seja encontrado dentro de um nome maior
+    if ($env:COMPUTERNAME) { $t = $t -replace ("\b" + [regex]::Escape($env:COMPUTERNAME) + "\b"), "TERMINAL-XX" }
+    if ($env:USERNAME)     { $t = $t -replace ("\b" + [regex]::Escape($env:USERNAME) + "\b"), "usuario" }
+    if ($env:USERDOMAIN)   { $t = $t -replace ("\b" + [regex]::Escape($env:USERDOMAIN) + "\b"), "DOMINIO" }
+    if ($ServidorLoja)     { $t = $t -replace ("\b" + [regex]::Escape($ServidorLoja) + "\b"), "SERVIDOR-XX" }
+    if ($script:SerialReal){ $t = $t -replace ("\b" + [regex]::Escape($script:SerialReal) + "\b"), "********" }
     return $t
 }
 

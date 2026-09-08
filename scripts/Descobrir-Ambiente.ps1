@@ -4,14 +4,21 @@
 .DESCRIPTION
     Roda ANTES do diagnostico. Somente leitura. Nao altera nada.
     Ao final imprime a linha de comando ja preenchida para voce copiar e colar.
+.PARAMETER Executar
+    Ja executa o diagnostico com o que foi descoberto, sem passo manual.
 .EXAMPLE
     .\Descobrir-Ambiente.ps1
+.EXAMPLE
+    .\Descobrir-Ambiente.ps1 -Executar
 .NOTES
     Kit PDV Blindado | Somente leitura
 #>
 
 [CmdletBinding()]
-param([switch] $Anonimizar)
+param(
+    # Roda o diagnostico direto, sem voce precisar copiar comando nenhum.
+    [switch] $Executar
+)
 
 $ErrorActionPreference = "Continue"
 function Titulo($t) { Write-Host ""; Write-Host "  $t" -ForegroundColor Cyan; Write-Host ("  " + ("-" * $t.Length)) -ForegroundColor DarkGray }
@@ -136,10 +143,52 @@ $alvo = if ($candidatos.Count -gt 0) { $candidatos[0] } elseif ($gw) { $gw } els
 $paraMonitorar.Add("Spooler")
 $listaServ = (($paraMonitorar | Select-Object -Unique) | ForEach-Object { '"' + $_ + '"' }) -join ","
 
-Titulo "5. Copie e cole a linha abaixo"
-Write-Host ""
-Write-Host "    .\Diagnostico-PDV.ps1 -ServidorLoja $alvo -ServicosCriticos $listaServ -Anonimizar" -ForegroundColor Yellow
-Write-Host ""
+# O caminho e resolvido a partir de onde ESTE script esta, nao do diretorio
+# atual - senao a linha sugerida so funciona se voce ja estiver na pasta certa.
+$meuDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$oDiag   = Join-Path $meuDir "Diagnostico-PDV.ps1"
+
+$svcArray = @($paraMonitorar | Select-Object -Unique)
+$cmd = '& "{0}" -ServidorLoja {1} -ServicosCriticos {2} -Anonimizar' -f $oDiag, $alvo, $listaServ
+
+if ($Executar) {
+    Titulo "5. Executando o diagnostico"
+    if (-not (Test-Path $oDiag)) {
+        Write-Host "    Diagnostico-PDV.ps1 nao esta em $meuDir. Baixe-o para a mesma pasta." -ForegroundColor Red
+    } else {
+        Write-Host ("    Servidor : {0}" -f $alvo) -ForegroundColor DarkGray
+        Write-Host ("    Servicos : {0}" -f ($svcArray -join ", ")) -ForegroundColor DarkGray
+        Write-Host ""
+        & $oDiag -ServidorLoja $alvo -ServicosCriticos $svcArray -Anonimizar
+    }
+}
+else {
+    Titulo "5. Proximo passo"
+    Write-Host ""
+    if (Test-Path $oDiag) {
+        $copiado = $false
+        try { Set-Clipboard -Value $cmd -ErrorAction Stop; $copiado = $true } catch { }
+        if ($copiado) {
+            Write-Host "    O comando ja esta na area de transferencia." -ForegroundColor Green
+            Write-Host "    Cole com Ctrl+V e de Enter." -ForegroundColor Green
+            Write-Host ""
+            Write-Host "    Ou, mais simples ainda, rode de novo assim:" -ForegroundColor DarkGray
+            Write-Host "      .\Descobrir-Ambiente.ps1 -Executar" -ForegroundColor Yellow
+        } else {
+            Write-Host "    Rode de novo com -Executar - evita copiar caminho longo:" -ForegroundColor Green
+            Write-Host "      .\Descobrir-Ambiente.ps1 -Executar" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "    Ou copie a linha inteira abaixo (ela comeca no E comercial):" -ForegroundColor DarkGray
+            Write-Host "    $cmd" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "    Diagnostico-PDV.ps1 nao esta nesta pasta ($meuDir)." -ForegroundColor Red
+        Write-Host "    Baixe com:" -ForegroundColor Red
+        Write-Host ("    Invoke-WebRequest `"https://raw.githubusercontent.com/AdirckRocha/kit-pdv-blindado/main/scripts/Diagnostico-PDV.ps1`" -OutFile `"{0}\Diagnostico-PDV.ps1`" -UseBasicParsing" -f $meuDir) -ForegroundColor Yellow
+        Write-Host "    Depois rode: .\Descobrir-Ambiente.ps1 -Executar" -ForegroundColor Yellow
+    }
+    Write-Host ""
+}
 if ($candidatos.Count -gt 1) {
     Write-Host ("    Outros servidores possiveis: {0}" -f (($candidatos | Select-Object -Skip 1) -join ", ")) -ForegroundColor DarkGray
 }
