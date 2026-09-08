@@ -58,8 +58,17 @@ try {
 
     Add-Check "Identificacao" "Terminal"        "INFO" $env:COMPUTERNAME
     Add-Check "Identificacao" "Sistema"         "INFO" "$($os.Caption) ($($os.Version))"
-    Add-Check "Identificacao" "Fabricante"      "INFO" "$($cs.Manufacturer) $($cs.Model)"
-    Add-Check "Identificacao" "Serial"          "INFO" $bios.SerialNumber
+    $lixo = @("Default string","To be filled by O.E.M.","System manufacturer",
+              "System Product Name","None","Not Specified","O.E.M.","")
+    function Limpar($t) {
+        if ($null -eq $t) { return "nao informado pelo fabricante" }
+        $t = $t.Trim()
+        foreach ($x in $lixo) { if ($t -eq $x) { return "nao informado pelo fabricante" } }
+        return $t
+    }
+    $fab = (Limpar $cs.Manufacturer), (Limpar $cs.Model) | Where-Object { $_ -ne "nao informado pelo fabricante" }
+    Add-Check "Identificacao" "Fabricante" "INFO" $(if ($fab) { $fab -join " " } else { "nao informado pelo fabricante" })
+    Add-Check "Identificacao" "Serial"     "INFO" (Limpar $bios.SerialNumber)
     Add-Check "Identificacao" "Usuario logado"  "INFO" "$env:USERDOMAIN\$env:USERNAME"
 
     $st = if ($uptime.TotalDays -gt 15) { "ATENCAO" } else { "OK" }
@@ -110,7 +119,7 @@ try {
                 $(if($st -eq "FALHA"){"Impressora offline - cupom nao sai. Checar cabo/USB, energia e fila."})
         }
     }
-    $fila = (Get-CimInstance Win32_PrintJob -ErrorAction SilentlyContinue | Measure-Object).Count
+    $fila = @(Get-CimInstance Win32_PrintJob -ErrorAction SilentlyContinue).Count
     $st = if ($fila -gt 5) { "ATENCAO" } else { "OK" }
     Add-Check "Impressao" "Fila de impressao" $st "$fila trabalho(s)" `
         $(if($st -eq "ATENCAO"){"Fila travada. Parar Spooler, limpar C:\Windows\System32\spool\PRINTERS e subir de novo."})
@@ -125,7 +134,14 @@ try {
 
 # --------------------------------------------------------------------- REDE
 try {
-    $adapters = Get-NetAdapter -ErrorAction Stop | Where-Object Status -eq "Up"
+    $virtuais = "vEthernet","Hyper-V","VirtualBox","VMware","Loopback","WSL","TAP-","Bluetooth"
+    $adapters = Get-NetAdapter -ErrorAction Stop | Where-Object Status -eq "Up" | Where-Object {
+        $nome = "$($_.Name) $($_.InterfaceDescription)"
+        -not ($virtuais | Where-Object { $nome -like "*$_*" })
+    }
+    if (-not $adapters) {
+        Add-Check "Rede" "Interfaces fisicas" "ATENCAO" "nenhuma ativa" "So ha adaptadores virtuais no ar. Checar cabo e placa de rede."
+    }
     foreach ($a in $adapters) {
         Add-Check "Rede" "Interface $($a.Name)" "OK" "$($a.LinkSpeed)"
     }
@@ -181,12 +197,18 @@ if ($ServidorLoja) {
 
 # --------------------------------------------------------------------- HORA
 try {
-    $w32 = (w32tm /query /status 2>&1 | Out-String)
-    if ($w32 -match "Origem:|Source:") {
-        $src = ($w32 -split "`n" | Where-Object { $_ -match "Origem:|Source:" } | Select-Object -First 1).Trim()
-        Add-Check "Data e hora" "Sincronizacao" "OK" $src "Hora errada quebra emissao fiscal e conciliacao de caixa."
+    # w32tm devolve a fonte com um sufixo de flag, ex.: "time.windows.com,0x9".
+    # O sufixo faz parte da resposta normal - nao e sinal de erro.
+    $bruto = (w32tm /query /source 2>&1 | Out-String).Trim()
+    $fonte = ($bruto -split ",")[0].Trim()
+    $semFonte = @("Local CMOS Clock","Free-running System Clock","Relogio CMOS local","")
+    $servico  = (Get-Service W32Time -ErrorAction SilentlyContinue).Status
+    if ($servico -ne "Running") {
+        Add-Check "Data e hora" "Sincronizacao" "ATENCAO" "servico W32Time parado" "Sem o servico a hora nao sincroniza. Rodar: net start w32time"
+    } elseif ($semFonte -notcontains $fonte -and $bruto -notmatch "erro|error|0x8") {
+        Add-Check "Data e hora" "Sincronizacao" "OK" $fonte "Hora errada quebra emissao fiscal e conciliacao de caixa."
     } else {
-        Add-Check "Data e hora" "Sincronizacao" "ATENCAO" "nao sincronizado" "Rodar: w32tm /resync"
+        Add-Check "Data e hora" "Sincronizacao" "ATENCAO" $(if ($fonte) { $fonte } else { "sem fonte de tempo" }) "Relogio livre, sem servidor de tempo. Rodar: w32tm /resync"
     }
     Add-Check "Data e hora" "Hora local" "INFO" (Get-Date -Format "dd/MM/yyyy HH:mm:ss")
 } catch { Add-Check "Data e hora" "Sincronizacao" "ATENCAO" "nao verificavel" }
@@ -195,7 +217,7 @@ try {
 try {
     $desde = (Get-Date).AddDays(-$DiasLog)
     $erros = Get-WinEvent -FilterHashtable @{LogName='System'; Level=1,2; StartTime=$desde} -ErrorAction SilentlyContinue
-    $qtd = ($erros | Measure-Object).Count
+    $qtd = @($erros).Count
     $st = if ($qtd -gt 50) { "FALHA" } elseif ($qtd -gt 10) { "ATENCAO" } else { "OK" }
     Add-Check "Eventos" "Erros criticos (ultimos $DiasLog dias)" $st "$qtd evento(s)"
 
@@ -206,8 +228,8 @@ try {
 } catch { Add-Check "Eventos" "Coleta" "ATENCAO" "erro" $_.Exception.Message }
 
 # ------------------------------------------------------------------ RELATORIO
-$falhas   = ($resultados | Where-Object Status -eq "FALHA").Count
-$atencoes = ($resultados | Where-Object Status -eq "ATENCAO").Count
+$falhas   = @($resultados | Where-Object Status -eq "FALHA").Count
+$atencoes = @($resultados | Where-Object Status -eq "ATENCAO").Count
 $veredito = if ($falhas -gt 0) { "CRITICO" } elseif ($atencoes -gt 0) { "ATENCAO" } else { "SAUDAVEL" }
 $corVer   = switch ($veredito) { "CRITICO" {"#c0392b"} "ATENCAO" {"#b9770e"} default {"#1e8449"} }
 
