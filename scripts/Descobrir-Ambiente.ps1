@@ -73,33 +73,68 @@ if ($sqlLocal) {
 }
 
 # ------------------------------------------ 4. SERVICOS QUE NAO SAO DA MICROSOFT
-Titulo "4. Servicos de terceiros rodando (o do seu PDV esta aqui)"
-$palavras = "linx","pdv","pos","caixa","venda","retail","loja","fisc","sat","tef","sitef","microvix","frente"
+Titulo "4. Servicos de terceiros, por funcao"
+
+# Categorias montadas a partir do que roda de verdade num terminal de loja.
+# Hardware entra aqui porque impressora e pinpad sao a causa mais comum de
+# chamado - software de PDV parado e menos frequente que cupom que nao sai.
+$categorias = [ordered]@{
+    "BANCO DE DADOS"      = 'mssql|sqlserver|sqlagent|firebird|postgres|mysql|oracle|sqlanywhere|sybase'
+    "SISTEMA DE VENDAS"   = 'linx|microvix|totvs|senior|consinco|sysmo|\bpdv\b|\bcaixa\b|venda|frente|retail|varejo|\bloja\b'
+    "IMPRESSORA"          = 'epson|bematech|elgin|daruma|sweda|diebold|impressora|printer|spool'
+    "PINPAD / TEF"        = 'gertec|ingenico|verifone|\bpax\b|sitef|\btef\b|pinpad|stone|cielo|getnet|paygo'
+    "FISCAL"              = '\bsat\b|nfce|nfe\b|fiscal|acbr|emissor|sefaz'
+    "PERIFERICO"          = 'balanca|toledo|filizola|scanner|leitor|gaveta|checkout'
+    "ACESSO REMOTO"       = 'teamviewer|anydesk|\bvnc\b|logmein|rustdesk|helpdesk|\brmm\b|supremo'
+}
+
 $serv = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object {
     $_.State -eq "Running" -and $_.PathName -notmatch "\\Windows\\" -and $_.PathName
 })
-if ($serv) {
-    $provaveis = @($serv | Where-Object { $t = "$($_.Name) $($_.DisplayName) $($_.PathName)"; $palavras | Where-Object { $t -match $_ } })
-    if ($provaveis) {
-        Write-Host "    PROVAVEIS - nome do servico entre aspas:" -ForegroundColor Green
-        foreach ($s in $provaveis) { Write-Host ("      `"{0}`"  ->  {1}" -f $s.Name, $s.DisplayName) -ForegroundColor Green }
-        Write-Host ""
+
+$classificados = @{}
+$paraMonitorar = New-Object System.Collections.Generic.List[string]
+$jaVisto       = New-Object System.Collections.Generic.List[string]
+
+foreach ($cat in $categorias.Keys) {
+    $regex = $categorias[$cat]
+    $achados = @($serv | Where-Object {
+        $texto = "$($_.Name) $($_.DisplayName) $($_.PathName)"
+        $texto -match $regex -and -not $jaVisto.Contains($_.Name)
+    })
+    foreach ($a in $achados) { $jaVisto.Add($a.Name) }
+    if ($achados) { $classificados[$cat] = $achados }
+}
+
+foreach ($cat in $categorias.Keys) {
+    if (-not $classificados.ContainsKey($cat)) { continue }
+    $cor = if ($cat -eq "ACESSO REMOTO") { "DarkGray" } else { "Green" }
+    Write-Host ""
+    Write-Host ("    [$cat]") -ForegroundColor $cor
+    foreach ($a in $classificados[$cat]) {
+        Write-Host ('      "{0}"' -f $a.Name) -ForegroundColor $cor -NoNewline
+        Write-Host ("   {0}" -f $a.DisplayName) -ForegroundColor DarkGray
+        # acesso remoto nao entra no monitoramento: cair nao para a loja
+        if ($cat -ne "ACESSO REMOTO") { $paraMonitorar.Add($a.Name) }
     }
-    $outros = @($serv | Where-Object { $provaveis -notcontains $_ })
-    if ($outros) {
-        Write-Host "    Outros servicos de terceiros:" -ForegroundColor DarkGray
-        foreach ($s in ($outros | Sort-Object DisplayName | Select-Object -First 15)) {
-            Write-Host ("      {0,-30} {1}" -f $s.Name, $s.DisplayName) -ForegroundColor DarkGray
-        }
-        if ($outros.Count -gt 15) { Write-Host ("      ... e mais {0}." -f ($outros.Count - 15)) -ForegroundColor DarkGray }
+}
+
+$naoClassificados = @($serv | Where-Object { -not $jaVisto.Contains($_.Name) })
+if ($naoClassificados) {
+    Write-Host ""
+    Write-Host "    [NAO CLASSIFICADO - confira se algum e do PDV]" -ForegroundColor Yellow
+    foreach ($n in ($naoClassificados | Sort-Object DisplayName | Select-Object -First 15)) {
+        Write-Host ("      {0,-32} {1}" -f $n.Name, $n.DisplayName) -ForegroundColor DarkGray
     }
-} else {
-    Write-Host "    Nenhum servico de terceiro em execucao." -ForegroundColor Yellow
+    if ($naoClassificados.Count -gt 15) {
+        Write-Host ("      ... e mais {0}." -f ($naoClassificados.Count - 15)) -ForegroundColor DarkGray
+    }
 }
 
 # ------------------------------------------------------ 5. COMANDO PRONTO
 $alvo = if ($candidatos.Count -gt 0) { $candidatos[0] } elseif ($gw) { $gw } else { "<ip-do-servidor>" }
-$listaServ = if ($provaveis) { ($provaveis | ForEach-Object { '"' + $_.Name + '"' }) -join "," } else { '"Spooler","W32Time"' }
+$paraMonitorar.Add("Spooler")
+$listaServ = (($paraMonitorar | Select-Object -Unique) | ForEach-Object { '"' + $_ + '"' }) -join ","
 
 Titulo "5. Copie e cole a linha abaixo"
 Write-Host ""
