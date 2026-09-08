@@ -13,6 +13,16 @@
     Lista de servicos que precisam estar rodando neste terminal.
 .PARAMETER Saida
     Pasta onde o relatorio sera gravado. Padrao: Desktop do usuario atual.
+.PARAMETER Simular
+    Mostra quais correcoes seriam feitas, sem executar nenhuma.
+.PARAMETER Corrigir
+    Executa as correcoes da lista branca (servico critico parado e fila de
+    impressao travada). Exige privilegio de administrador. Grava o estado
+    anterior em log para permitir desfazer.
+.PARAMETER Anonimizar
+    Mascara nome da maquina, usuario, dominio, serial, nome do servidor e
+    enderecos IP privados no relatorio. Use para anexar em chamado de
+    terceiro sem expor a infraestrutura.
 .EXAMPLE
     .\Diagnostico-PDV.ps1 -ServidorLoja 192.168.0.10
 .EXAMPLE
@@ -28,12 +38,37 @@ param(
     [string[]] $ServicosCriticos  = @("Spooler","W32Time","LanmanWorkstation"),
     [string]   $Saida             = "$env:USERPROFILE\Desktop",
     [int]      $DiasLog           = 2,
-    [int]      $LimiteDiscoLivreGB = 10
+    [int]      $LimiteDiscoLivreGB = 10,
+    [switch]   $Simular,
+    [switch]   $Corrigir,
+    [switch]   $Anonimizar
 )
 
 $ErrorActionPreference = "Continue"
 Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
 $resultados = New-Object System.Collections.Generic.List[object]
+$correcoes  = New-Object System.Collections.Generic.List[object]
+$script:SerialReal = $null
+
+function Add-Correcao {
+    param($Acao, $Status, $Detalhe = "")
+    $correcoes.Add([pscustomobject]@{ Acao = $Acao; Status = $Status; Detalhe = $Detalhe })
+}
+
+# Mascara dados que identificam a maquina e a rede. Somente com -Anonimizar.
+function Mascarar([string]$t) {
+    if (-not $Anonimizar -or [string]::IsNullOrEmpty($t)) { return $t }
+    if ($env:COMPUTERNAME) { $t = $t -replace [regex]::Escape($env:COMPUTERNAME), "TERMINAL-XX" }
+    if ($env:USERNAME)     { $t = $t -replace [regex]::Escape($env:USERNAME), "usuario" }
+    if ($env:USERDOMAIN)   { $t = $t -replace [regex]::Escape($env:USERDOMAIN), "DOMINIO" }
+    if ($ServidorLoja)     { $t = $t -replace [regex]::Escape($ServidorLoja), "SERVIDOR-XX" }
+    if ($script:SerialReal){ $t = $t -replace [regex]::Escape($script:SerialReal), "********" }
+    # apenas faixas privadas - resolvedores publicos continuam legiveis
+    $t = $t -replace "\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "10.x.x.x"
+    $t = $t -replace "\b192\.168\.\d{1,3}\.\d{1,3}\b", "192.168.x.x"
+    $t = $t -replace "\b172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b", "172.x.x.x"
+    return $t
+}
 
 function Add-Check {
     param($Grupo, $Item, $Status, $Valor, $Detalhe = "")
@@ -68,6 +103,7 @@ try {
     }
     $fab = (Limpar $cs.Manufacturer), (Limpar $cs.Model) | Where-Object { $_ -ne "nao informado pelo fabricante" }
     Add-Check "Identificacao" "Fabricante" "INFO" $(if ($fab) { $fab -join " " } else { "nao informado pelo fabricante" })
+    $script:SerialReal = $bios.SerialNumber
     Add-Check "Identificacao" "Serial"     "INFO" (Limpar $bios.SerialNumber)
     Add-Check "Identificacao" "Usuario logado"  "INFO" "$env:USERDOMAIN\$env:USERNAME"
 
@@ -228,6 +264,83 @@ try {
 } catch { Add-Check "Eventos" "Coleta" "ATENCAO" "erro" $_.Exception.Message }
 
 # ------------------------------------------------------------------ RELATORIO
+# ------------------------------------------------------- CORRECAO AUTOMATICA
+# Lista branca: apenas acoes onde o dano possivel e menor que o dano existente.
+# Servico ja parado nao piora ao subir. Fila travada nao piora ao ser limpa.
+# Tudo o mais e apenas sugerido, nunca executado.
+if ($Simular -or $Corrigir) {
+    $ehAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+               ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+    $logDir = "$env:ProgramData\KitPDV\logs"
+    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    $logCor = Join-Path $logDir ("correcao_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+    function Log($m) { Add-Content -Path $logCor -Value ("[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $m) }
+    Log "Inicio - terminal $env:COMPUTERNAME - modo $(if($Simular){'SIMULAR'}else{'CORRIGIR'}) - admin=$ehAdmin"
+
+    if (-not $ehAdmin -and $Corrigir) {
+        Add-Correcao "Correcao automatica" "BLOQUEADO" "Execute como Administrador. Nenhuma alteracao foi tentada."
+        Log "Abortado: sem privilegio de administrador."
+    }
+    else {
+        # --- acao 1: servico critico parado ---
+        foreach ($nome in $ServicosCriticos) {
+            $svc = Get-Service -Name $nome -ErrorAction SilentlyContinue
+            if (-not $svc -or $svc.Status -eq "Running") { continue }
+
+            $modoAnterior = (Get-CimInstance Win32_Service -Filter "Name='$($svc.Name)'" -ErrorAction SilentlyContinue).StartMode
+            Log "ROLLBACK-INFO: $($svc.Name) estava '$($svc.Status)' com StartMode '$modoAnterior'."
+
+            if ($Simular) {
+                Add-Correcao "Iniciar servico $($svc.DisplayName)" "SIMULADO" "Estava '$($svc.Status)'. Rode com -Corrigir para executar."
+                continue
+            }
+            try {
+                Start-Service -Name $svc.Name -ErrorAction Stop
+                Start-Sleep -Seconds 3
+                $svc.Refresh()
+                if ($svc.Status -eq "Running") {
+                    Add-Correcao "Iniciar servico $($svc.DisplayName)" "CORRIGIDO" "Estado anterior gravado em $logCor"
+                    Log "SUCESSO: $($svc.DisplayName) iniciado."
+                } else {
+                    Add-Correcao "Iniciar servico $($svc.DisplayName)" "FALHOU" "Servico subiu e caiu. Causa esta em dependencia, licenca ou disco - ver Visualizador de Eventos."
+                    Log "FALHA: $($svc.DisplayName) continua '$($svc.Status)'."
+                }
+            } catch {
+                Add-Correcao "Iniciar servico $($svc.DisplayName)" "FALHOU" $_.Exception.Message
+                Log "ERRO ao iniciar $($svc.DisplayName): $($_.Exception.Message)"
+            }
+        }
+
+        # --- acao 2: fila de impressao travada ---
+        if ($fila -gt 5) {
+            if ($Simular) {
+                Add-Correcao "Destravar fila de impressao" "SIMULADO" "$fila trabalho(s) na fila. Rode com -Corrigir para executar."
+            } else {
+                try {
+                    Log "ROLLBACK-INFO: fila com $fila trabalho(s) antes da limpeza. Trabalhos pendentes serao descartados."
+                    Stop-Service Spooler -Force -ErrorAction Stop
+                    Start-Sleep -Seconds 2
+                    Remove-Item "$env:SystemRoot\System32\spool\PRINTERS\*" -Force -ErrorAction SilentlyContinue
+                    Start-Service Spooler -ErrorAction Stop
+                    Start-Sleep -Seconds 2
+                    $filaDepois = @(Get-CimInstance Win32_PrintJob -ErrorAction SilentlyContinue).Count
+                    Add-Correcao "Destravar fila de impressao" "CORRIGIDO" "$fila trabalho(s) descartado(s). Fila agora com $filaDepois."
+                    Log "SUCESSO: fila limpa, agora com $filaDepois trabalho(s)."
+                } catch {
+                    Add-Correcao "Destravar fila de impressao" "FALHOU" $_.Exception.Message
+                    Log "ERRO ao limpar fila: $($_.Exception.Message)"
+                }
+            }
+        }
+
+        if ($correcoes.Count -eq 0) {
+            Add-Correcao "Nenhuma acao necessaria" "OK" "Nada na lista branca precisava de correcao neste terminal."
+        }
+    }
+    Log "Fim."
+}
+
 $falhas   = @($resultados | Where-Object Status -eq "FALHA").Count
 $atencoes = @($resultados | Where-Object Status -eq "ATENCAO").Count
 $veredito = if ($falhas -gt 0) { "CRITICO" } elseif ($atencoes -gt 0) { "ATENCAO" } else { "SAUDAVEL" }
@@ -238,10 +351,25 @@ foreach ($g in ($resultados | Group-Object Grupo)) {
     $linhas += "<tr class='grupo'><td colspan='3'>$($g.Name)</td></tr>"
     foreach ($r in $g.Group) {
         $cls = switch ($r.Status) { "OK"{"ok"} "ATENCAO"{"warn"} "FALHA"{"fail"} default{"info"} }
-        $det = if ($r.Detalhe) { "<div class='det'>$([System.Web.HttpUtility]::HtmlEncode($r.Detalhe))</div>" } else { "" }
-        $linhas += "<tr><td class='item'>$([System.Web.HttpUtility]::HtmlEncode($r.Item))$det</td><td class='val'>$([System.Web.HttpUtility]::HtmlEncode([string]$r.Valor))</td><td><span class='badge $cls'>$($r.Status)</span></td></tr>"
+        $det = if ($r.Detalhe) { "<div class='det'>$([System.Web.HttpUtility]::HtmlEncode((Mascarar $r.Detalhe)))</div>" } else { "" }
+        $linhas += "<tr><td class='item'>$([System.Web.HttpUtility]::HtmlEncode((Mascarar $r.Item)))$det</td><td class='val'>$([System.Web.HttpUtility]::HtmlEncode((Mascarar ([string]$r.Valor))))</td><td><span class='badge $cls'>$($r.Status)</span></td></tr>"
     }
 }
+
+$blocoCorrecao = ""
+if ($correcoes.Count -gt 0) {
+    $itens = ""
+    foreach ($c in $correcoes) {
+        $cc = switch ($c.Status) { "CORRIGIDO" {"ok"} "SIMULADO" {"info"} "OK" {"ok"} "BLOQUEADO" {"warn"} default {"fail"} }
+        $dd = if ($c.Detalhe) { "<div class='det'>$([System.Web.HttpUtility]::HtmlEncode((Mascarar $c.Detalhe)))</div>" } else { "" }
+        $itens += "<tr><td class='item'>$([System.Web.HttpUtility]::HtmlEncode((Mascarar $c.Acao)))$dd</td><td class='val'></td><td><span class='badge $cc'>$($c.Status)</span></td></tr>"
+    }
+    $titulo = if ($Simular) { "O que seria corrigido (simulacao - nada foi alterado)" } else { "Correcoes aplicadas automaticamente" }
+    $blocoCorrecao = "<table><tr class='grupo corrigido'><td colspan='3'>$titulo</td></tr>$itens</table>"
+}
+
+$nomeMaquina = Mascarar $env:COMPUTERNAME
+$nomeUsuario = Mascarar $env:USERNAME
 
 $html = @"
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
@@ -256,6 +384,7 @@ $html = @"
  .resumo{font-size:13px;color:#556;margin-top:8px}
  table{width:100%;border-collapse:collapse;font-size:13px}
  td{padding:8px 24px;border-bottom:1px solid #eef1f3;vertical-align:top}
+ tr.grupo.corrigido td{background:#e2eff0;color:#0e5c63}
  tr.grupo td{background:#f0f3f6;font-weight:700;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:#456}
  .item{width:45%} .val{width:38%;color:#334}
  .det{font-size:11.5px;color:#7a6000;background:#fffbe6;border-left:3px solid #e2b203;padding:5px 8px;margin-top:5px;border-radius:0 4px 4px 0}
@@ -264,21 +393,28 @@ $html = @"
  footer{padding:14px 24px;font-size:11.5px;color:#889;border-top:1px solid #e3e7ea}
 </style></head><body><div class="card">
 <header>
- <h1>Diagnostico de PDV - $env:COMPUTERNAME</h1>
- <div class="sub">Gerado em $(Get-Date -Format 'dd/MM/yyyy HH:mm:ss') &middot; usuario $env:USERNAME</div>
+ <h1>Diagnostico de PDV - $nomeMaquina</h1>
+ <div class="sub">Gerado em $(Get-Date -Format 'dd/MM/yyyy HH:mm:ss') &middot; usuario $nomeUsuario$(if($Anonimizar){' &middot; relatorio anonimizado'})</div>
  <div class="veredito">$veredito</div>
  <div class="resumo">$falhas falha(s) &middot; $atencoes ponto(s) de atencao &middot; $($resultados.Count) verificacoes</div>
 </header>
+$blocoCorrecao
 <table>$linhas</table>
 <footer>Kit PDV Blindado &middot; verificacoes somente-leitura &middot; nenhuma alteracao foi feita neste terminal</footer>
 </div></body></html>
 "@
 
 if (-not (Test-Path $Saida)) { New-Item -ItemType Directory -Path $Saida -Force | Out-Null }
-$arquivo = Join-Path $Saida ("Diagnostico_{0}_{1}.html" -f $env:COMPUTERNAME, (Get-Date -Format "yyyyMMdd_HHmmss"))
+$rotulo  = if ($Anonimizar) { "ANONIMO" } else { $env:COMPUTERNAME }
+$arquivo = Join-Path $Saida ("Diagnostico_{0}_{1}.html" -f $rotulo, (Get-Date -Format "yyyyMMdd_HHmmss"))
 $html | Out-File -FilePath $arquivo -Encoding UTF8
 
 Write-Host ""
 Write-Host "Veredito: $veredito  ($falhas falha(s), $atencoes atencao)" -ForegroundColor $(if($falhas){"Red"}elseif($atencoes){"Yellow"}else{"Green"})
+if ($correcoes.Count -gt 0) {
+    $rotuloC = if ($Simular) { "Simulacao" } else { "Correcoes" }
+    Write-Host "$($rotuloC): $($correcoes.Count) acao(oes) - ver secao no relatorio" -ForegroundColor Cyan
+}
+if ($Anonimizar) { Write-Host "Relatorio anonimizado - seguro para anexar em chamado de terceiro." -ForegroundColor Cyan }
 Write-Host "Relatorio: $arquivo" -ForegroundColor Cyan
 try { Start-Process $arquivo } catch {}
