@@ -31,6 +31,11 @@ Output is a single HTML file with a **HEALTHY / WARNING / CRITICAL** verdict and
 
 ## Quick start
 
+**Simplest way:** download [`Rodar-Diagnostico.bat`](Rodar-Diagnostico.bat) and double-click it on the terminal. It fetches the current version, discovers the environment and produces the report. Read-only.
+
+Or from PowerShell:
+
+
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 

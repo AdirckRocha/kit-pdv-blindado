@@ -19,3 +19,6 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# Ferramenta de laboratorio - nao pertence ao produto
+Laboratorio-Falhas.ps1

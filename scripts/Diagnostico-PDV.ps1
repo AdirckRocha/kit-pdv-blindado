@@ -50,6 +50,18 @@ $resultados = New-Object System.Collections.Generic.List[object]
 $correcoes  = New-Object System.Collections.Generic.List[object]
 $script:SerialReal = $null
 
+# Depois de uma correcao bem-sucedida a coleta feita no inicio fica obsoleta.
+# Sem isto a tabela mostra o estado de antes e contradiz o painel de correcoes.
+function Atualiza-Linha {
+    param($Grupo, $Item, $Status, $Valor, $Detalhe)
+    $linha = $resultados | Where-Object { $_.Grupo -eq $Grupo -and $_.Item -eq $Item } | Select-Object -First 1
+    if ($linha) {
+        $linha.Status  = $Status
+        $linha.Valor   = $Valor
+        $linha.Detalhe = $Detalhe
+    }
+}
+
 function Add-Correcao {
     param($Acao, $Status, $Detalhe = "")
     $correcoes.Add([pscustomobject]@{ Acao = $Acao; Status = $Status; Detalhe = $Detalhe })
@@ -183,7 +195,15 @@ try {
         Add-Check "Rede" "Interfaces fisicas" "ATENCAO" "nenhuma ativa" "So ha adaptadores virtuais no ar. Checar cabo e placa de rede."
     }
     foreach ($a in $adapters) {
-        Add-Check "Rede" "Interface $($a.Name)" "OK" "$($a.LinkSpeed)"
+        # PhysicalMediaType nao muda com o idioma do Windows, ao contrario
+        # do nome da interface. "Native 802.11" e o marcador de Wi-Fi.
+        $ehWifi = "$($a.PhysicalMediaType) $($a.InterfaceDescription)" -match "802\.11|Wireless|Wi-Fi"
+        if ($ehWifi) {
+            Add-Check "Rede" "Interface $($a.Name)" "ATENCAO" "$($a.LinkSpeed) - Wi-Fi" `
+                "Terminal de PDV em Wi-Fi e causa classica de falha intermitente: a venda trava sem motivo aparente e o problema some quando o tecnico chega. Sempre que possivel, cabo."
+        } else {
+            Add-Check "Rede" "Interface $($a.Name)" "OK" "$($a.LinkSpeed)"
+        }
     }
     $ipcfg = Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4DefaultGateway }
     foreach ($c in $ipcfg) {
@@ -305,6 +325,7 @@ if ($Simular -or $Corrigir) {
                 $svc.Refresh()
                 if ($svc.Status -eq "Running") {
                     Add-Correcao "Iniciar servico $($svc.DisplayName)" "CORRIGIDO" "Estado anterior gravado em $logCor"
+                    Atualiza-Linha "Servicos" $svc.DisplayName "OK" "Running" "Estava parado. Foi iniciado automaticamente nesta execucao."
                     Log "SUCESSO: $($svc.DisplayName) iniciado."
                 } else {
                     Add-Correcao "Iniciar servico $($svc.DisplayName)" "FALHOU" "Servico subiu e caiu. Causa esta em dependencia, licenca ou disco - ver Visualizador de Eventos."
@@ -330,6 +351,7 @@ if ($Simular -or $Corrigir) {
                     Start-Sleep -Seconds 2
                     $filaDepois = @(Get-CimInstance Win32_PrintJob -ErrorAction SilentlyContinue).Count
                     Add-Correcao "Destravar fila de impressao" "CORRIGIDO" "$fila trabalho(s) descartado(s). Fila agora com $filaDepois."
+                    Atualiza-Linha "Impressao" "Fila de impressao" "OK" "$filaDepois trabalho(s)" "Fila tinha $fila trabalho(s) travado(s) e foi limpa nesta execucao."
                     Log "SUCESSO: fila limpa, agora com $filaDepois trabalho(s)."
                 } catch {
                     Add-Correcao "Destravar fila de impressao" "FALHOU" $_.Exception.Message

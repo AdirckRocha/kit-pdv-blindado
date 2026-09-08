@@ -16,6 +16,8 @@ Foi escrito por quem atende chamado de loja: o objetivo é **descobrir onde est�
 
 | Arquivo | O que faz | Altera algo? |
 |---|---|---|
+| [`Rodar-Diagnostico.bat`](Rodar-Diagnostico.bat) | Baixa e roda tudo com um duplo clique | Não |
+| [`scripts/Descobrir-Ambiente.ps1`](scripts/Descobrir-Ambiente.ps1) | Acha o servidor e os serviços do PDV, e já executa o diagnóstico | Não |
 | [`scripts/Diagnostico-PDV.ps1`](scripts/Diagnostico-PDV.ps1) | Diagnóstico completo do terminal com relatório HTML e semáforo | Não |
 | [`scripts/Teste-Rapido-Loja.bat`](scripts/Teste-Rapido-Loja.bat) | Teste que o pessoal da loja roda sozinho antes de abrir chamado | Não |
 | [`scripts/Coletar-Evidencias.ps1`](scripts/Coletar-Evidencias.ps1) | Empacota evidências num `.zip` para anexar no chamado | Não |
@@ -30,6 +32,11 @@ Identificação e uptime · memória e espaço em disco · serviços críticos �
 O resultado sai num HTML com veredito **SAUDÁVEL / ATENÇÃO / CRÍTICO** e, em cada item que falhou, a orientação do que fazer a seguir.
 
 ## Começando
+
+**A forma mais simples:** baixe [`Rodar-Diagnostico.bat`](Rodar-Diagnostico.bat) e dê duplo clique nele no terminal. Ele baixa a versão atual, descobre o ambiente sozinho e gera o relatório. Somente leitura, não altera nada.
+
+Se preferir pelo PowerShell:
+
 
 ```powershell
 # Liberar execução apenas nesta sessão

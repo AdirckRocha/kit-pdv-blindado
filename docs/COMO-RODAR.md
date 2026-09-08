@@ -22,7 +22,11 @@ Nenhum modo exige administrador, **exceto** `-Corrigir`.
 
 Escolha o que funcionar no seu ambiente. As três dão no mesmo.
 
-**A. Baixar direto pelo PowerShell** (mais rápido, precisa de internet no terminal)
+**A. Um arquivo só** (recomendado)
+
+Baixe `Rodar-Diagnostico.bat` do repositório e dê duplo clique no terminal. Ele baixa a versão atual, descobre o ambiente e gera o relatório. Se a rede da loja bloquear o GitHub, ele avisa e explica a alternativa.
+
+**B. Baixar pelo PowerShell** (se preferir controlar cada passo)
 
 ```powershell
 $dest = "$env:TEMP\KitPDV"
@@ -31,13 +35,13 @@ $url = "https://raw.githubusercontent.com/AdirckRocha/kit-pdv-blindado/main/scri
 Invoke-WebRequest -Uri $url -OutFile "$dest\Diagnostico-PDV.ps1" -UseBasicParsing
 ```
 
-Se a rede da loja usa proxy, ou se a saída HTTPS é filtrada, este passo falha. Use B ou C.
+Se a rede da loja usa proxy, ou se a saída HTTPS é filtrada, este passo falha. Use C ou D.
 
-**B. Baixar o ZIP pelo navegador**
+**C. Baixar o ZIP pelo navegador**
 
 Abra `github.com/AdirckRocha/kit-pdv-blindado`, botão verde **Code** → **Download ZIP**, e extraia numa pasta temporária.
 
-**C. Copiar de um compartilhamento de rede**
+**D. Copiar de um compartilhamento de rede**
 
 ```powershell
 Copy-Item "\\servidor\ti\KitPDV\*" "$env:TEMP\KitPDV\" -Recurse -Force
